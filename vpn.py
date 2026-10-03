@@ -8,7 +8,7 @@ https://github.com/ln71v/vless-warp-panel  ·  MIT  ·  (c) 2026 Vaska_de_Gamma
          vpn flush      — сохранить счётчики трафика (вызывается cron'ом)
 Бот импортирует этот файл и пользуется теми же функциями.
 """
-import fcntl, json, os, platform, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
+import fcntl, json, os, platform, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
 
 CFG = "/usr/local/etc/xray/config.json"
 META = "/usr/local/etc/xray/vpn-meta.json"
@@ -21,6 +21,11 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 
 TRAFFIC = "/usr/local/etc/xray/vpn-traffic.json"
 CRON = "/etc/cron.d/vpn-traffic"
+UPDATE_CRON = "/etc/cron.d/vless-warp-panel-update"
+# Куда клиентам VPN ходить нельзя: сам сервер и внутренние сети
+PRIVATE_NETS = ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+                "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/3",
+                "::/127", "fc00::/7", "fe80::/10", "ff00::/8"]
 API_ADDR = "127.0.0.1:10085"
 
 MAIN_TAG = "vless-in"
@@ -54,11 +59,50 @@ def load_meta():
     return m
 
 
+def _write_private(path, data):
+    """Записать файл так, чтобы читал только root."""
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(data)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
 def save_meta(m):
-    tmp = META + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(m, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, META)
+    _write_private(META, json.dumps(m, indent=2, ensure_ascii=False))
+
+
+def xray_group():
+    """Группа, от которой работает Xray (по умолчанию nobody → nogroup). Нужна, чтобы закрыть конфиг от остальных."""
+    user = sh(["systemctl", "show", "xray", "-p", "User", "--value"]).stdout.strip() or "root"
+    try:
+        return pwd.getpwnam(user).pw_gid
+    except KeyError:
+        return 0
+
+
+def server_ips(meta):
+    """Свои адреса сервера (с сетевых карт + внешний, если хостер за NAT) — чтобы через VPN нельзя было зайти на его же порты."""
+    ips = set(meta.get("ips", []))
+    try:
+        for d in json.loads(sh(["ip", "-j", "addr", "show", "scope", "global"]).stdout or "[]"):
+            ips |= {a["local"] for a in d.get("addr_info", []) if a.get("local")}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return sorted(ips)
+
+
+def fix_perms():
+    """Ключи и списки пользователей — только root; конфиг Xray — root и группа xray."""
+    gid = xray_group()
+    for path, mode, g in ((CFG, 0o640 if gid else 0o600, gid), (CFG + ".bak", 0o600, 0),
+                          (META, 0o600, 0), (TRAFFIC, 0o600, 0)):
+        if os.path.exists(path):
+            os.chown(path, 0, g)
+            os.chmod(path, mode)
+    if os.path.isdir(WARP_DIR):
+        os.chmod(WARP_DIR, 0o700)
 
 
 def main_inbound(cfg):
@@ -83,7 +127,11 @@ def warp_installed(cfg=None):
 
 def rebuild_routing(cfg, meta):
     """Пересобрать правила маршрутизации из списка пользователей WARP."""
-    rules = []
+    # Первым правилом: клиентам VPN (и через WARP тоже) нельзя к самому серверу и во внутренние сети
+    rules = [{"type": "field", "inboundTag": [main_inbound(cfg)["tag"]],
+              "ip": PRIVATE_NETS + server_ips(meta), "outboundTag": "block"}]
+    if not any(o.get("tag") == "block" for o in cfg.get("outbounds", [])):
+        cfg.setdefault("outbounds", []).append({"protocol": "blackhole", "tag": "block"})
     if warp_outbound(cfg):
         rules.append({"type": "field", "inboundTag": [TEST_TAG], "outboundTag": WARP_TAG})
         if meta["warp_all"]:
@@ -94,7 +142,8 @@ def rebuild_routing(cfg, meta):
             users = [u for u in meta["warp_users"] if u in names]
             if users:
                 rules.append({"type": "field", "user": users, "outboundTag": WARP_TAG})
-    cfg["routing"] = {"domainStrategy": "AsIs", "rules": rules}
+    # IPIfNonMatch: домен вида localtest.me тоже проверяется по IP, обойти блок именем не выйдет
+    cfg["routing"] = {"domainStrategy": "IPIfNonMatch", "rules": rules}
 
 
 def ensure_stats(cfg):
@@ -137,10 +186,7 @@ def flush_traffic():
         t = tot.setdefault(u, [0, 0])
         t[0] += up
         t[1] += down
-    tmp = TRAFFIC + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(tot, f)
-    os.replace(tmp, TRAFFIC)
+    _write_private(TRAFFIC, json.dumps(tot))
 
 
 def ensure_cron():
@@ -151,8 +197,9 @@ def ensure_cron():
 
 def apply(cfg, meta=None):
     """Проверить конфиг, сохранить, перезапустить Xray; при сбое откатить."""
-    if meta is not None:
-        rebuild_routing(cfg, meta)
+    if meta is None:
+        meta = load_meta()
+    rebuild_routing(cfg, meta)
     ensure_stats(cfg)
     os.makedirs("/run/lock", exist_ok=True)
     with open(LOCK, "w") as lk:
@@ -160,7 +207,9 @@ def apply(cfg, meta=None):
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CFG), suffix=".json")
         with os.fdopen(fd, "w") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
-        os.chmod(tmp, 0o644)
+        gid = xray_group()
+        os.chown(tmp, 0, gid)
+        os.chmod(tmp, 0o640 if gid else 0o600)
         r = sh(["xray", "run", "-test", "-config", tmp])
         if r.returncode != 0:
             os.remove(tmp)
@@ -170,15 +219,18 @@ def apply(cfg, meta=None):
         except Exception:
             pass
         shutil.copy2(CFG, CFG + ".bak")
+        os.chmod(CFG + ".bak", 0o600)
         os.replace(tmp, CFG)
         sh(["systemctl", "restart", "xray"])
         time.sleep(1.5)
         if sh(["systemctl", "is-active", "xray"]).stdout.strip() != "active":
             shutil.copy2(CFG + ".bak", CFG)
+            os.chown(CFG, 0, gid)
+            os.chmod(CFG, 0o640 if gid else 0o600)
             sh(["systemctl", "restart", "xray"])
             raise VpnError("Xray не запустился с новым конфигом, откатила назад")
-        if meta is not None:
-            save_meta(meta)
+        save_meta(meta)
+        fix_perms()
 
 
 def pubkey(cfg):
@@ -317,7 +369,8 @@ def _wgcf_profile(fresh):
         _wgcf_download()
     if fresh and os.path.isdir(WARP_DIR):
         shutil.rmtree(WARP_DIR)
-    os.makedirs(WARP_DIR, exist_ok=True)
+    os.makedirs(WARP_DIR, mode=0o700, exist_ok=True)
+    os.chmod(WARP_DIR, 0o700)
     if not os.path.exists(f"{WARP_DIR}/wgcf-account.toml"):
         subprocess.run([WGCF, "register", "--accept-tos"], cwd=WARP_DIR, capture_output=True, text=True, timeout=60, check=True)
     subprocess.run([WGCF, "generate"], cwd=WARP_DIR, capture_output=True, text=True, timeout=60, check=True)
@@ -391,7 +444,7 @@ def status_text():
              f"Xray {act('xray')}   nginx {act('nginx')}"]
     host = meta["host"]
     if host:
-        end = sh(f"openssl x509 -enddate -noout -in /etc/letsencrypt/live/{host}/fullchain.pem 2>/dev/null").stdout
+        end = sh(["openssl", "x509", "-enddate", "-noout", "-in", f"/etc/letsencrypt/live/{host}/fullchain.pem"]).stdout
         if "=" in end:
             days = int((time.mktime(time.strptime(end.split("=", 1)[1].strip(), "%b %d %H:%M:%S %Y %Z")) - time.time()) // 86400)
             lines.append(f"Сертификат: ещё {days} дн.")
@@ -407,14 +460,17 @@ def status_text():
         lines.append(f"Через WARP: {mode}")
     else:
         lines.append("WARP: не установлен")
+    lines.append(f"Автообновление: {'вкл' if os.path.exists(UPDATE_CRON) else 'выкл'}")
     return "\n".join(lines)
 
 
 # ---------- бот ----------
 def bot_install(token, admin_id):
-    with open(BOT_ENV, "w") as f:
-        f.write(f"BOT_TOKEN={token}\nADMIN_ID={admin_id}\n")
-    os.chmod(BOT_ENV, 0o600)
+    if not re.fullmatch(r"\d+:[\w-]{30,}", token):
+        raise VpnError("это не похоже на токен бота (вида 1234567890:AAH...)")
+    if not re.fullmatch(r"\d+", admin_id):
+        raise VpnError("ID — только цифры")
+    _write_private(BOT_ENV, f"BOT_TOKEN={token}\nADMIN_ID={admin_id}\n")
     with open(BOT_UNIT, "w") as f:
         f.write(f"""[Unit]
 Description=VPN Telegram bot
@@ -439,9 +495,33 @@ def update():
     before = sh(["git", "-C", HERE, "rev-parse", "--short", "HEAD"]).stdout.strip()
     sh(["git", "-C", HERE, "pull", "-q", "--ff-only"], check=True)
     after = sh(["git", "-C", HERE, "rev-parse", "--short", "HEAD"]).stdout.strip()
-    if before != after and os.path.exists(BOT_UNIT):
-        sh(["systemctl", "restart", "vpn-bot"])
+    if before != after:
+        # новая версия сама допиливает конфиг (защита, счётчики), если надо
+        sh(["/usr/bin/python3", os.path.realpath(__file__), "migrate"], timeout=120)
+        if os.path.exists(BOT_UNIT):
+            sh(["systemctl", "restart", "vpn-bot"])
     return before, after
+
+
+def migrate():
+    """Довести конфиг и права до текущей версии панели. True — если что-то поменяла."""
+    ensure_cron()
+    cfg = load_cfg()
+    rules = cfg.get("routing", {}).get("rules", [])
+    if "stats" in cfg and rules and rules[0].get("outboundTag") == "block":
+        fix_perms()
+        return False
+    apply(cfg, load_meta())
+    return True
+
+
+def set_autoupdate(on):
+    """Ночное обновление из GitHub. По умолчанию выключено: включай, только если доверяешь репо."""
+    if on:
+        with open(UPDATE_CRON, "w") as f:
+            f.write(f"40 4 * * * root /usr/bin/python3 {os.path.realpath(__file__)} update >/dev/null 2>&1\n")
+    elif os.path.exists(UPDATE_CRON):
+        os.remove(UPDATE_CRON)
 
 
 # ---------- меню ----------
@@ -485,10 +565,8 @@ def menu():
         sys.exit("Запускай от root")
     if not os.path.exists(META):
         setup()
-    ensure_cron()
-    if "stats" not in load_cfg():
-        print("Включаю счётчики трафика…")
-        apply(load_cfg(), load_meta())
+    if migrate():
+        ok("конфиг обновлён: счётчики трафика и защита сервера")
     items = [
         ("Статус", lambda: print(status_text())),
         ("Пользователи: кто онлайн, трафик", lambda: [print(f"  • {user_line(u)}" + (f"\n      IP: {', '.join(u['ips'])}" if u['ips'] else "")) for u in list_users(stats=True)]),
@@ -506,6 +584,7 @@ def menu():
         ("Бот: лог", lambda: print(sh("journalctl -u vpn-bot -n 30 --no-pager").stdout)),
         ("Название и домен в ключах", setup),
         ("Обновить панель из GitHub", lambda: (lambda r: ok("уже последняя версия" if r[0] == r[1] else f"обновила {r[0]} → {r[1]}"))(update())),
+        ("Автообновление каждую ночь: вкл / выкл", lambda: (lambda a: (set_autoupdate(a == "1"), ok("включено" if a == "1" else "выключено")))(input("1 — включить, 0 — выключить: ").strip())),
     ]
     while True:
         print(f"\n{C}══════ vless-warp-panel ══════{N}")
@@ -533,6 +612,8 @@ if __name__ == "__main__":
         print(status_text())
     elif len(sys.argv) > 1 and sys.argv[1] == "flush":
         flush_traffic()
+    elif len(sys.argv) > 1 and sys.argv[1] == "migrate":
+        migrate()
     elif len(sys.argv) > 1 and sys.argv[1] == "update":
         b, a = update()
         print("уже последняя версия" if b == a else f"обновлено {b} → {a}")

@@ -73,8 +73,12 @@ ok "$DIR, команда vpn"
 step "Сайт-заглушка и сертификат"
 WEB="/var/www/$DOMAIN"
 mkdir -p "$WEB"
-BRAND_UPPER=$(echo "$BRAND" | tr '[:lower:]' '[:upper:]')
-sed "s|{{BRAND}}|$BRAND|g; s|{{BRAND_UPPER}}|$BRAND_UPPER|g" "$DIR/site/index.html" > "$WEB/index.html"
+python3 - "$DIR/site/index.html" "$WEB/index.html" "$BRAND" <<'PY'
+import html, sys
+src, dst, brand = sys.argv[1:]
+b = html.escape(brand)   # название сайта не может сломать страницу
+open(dst, "w").write(open(src).read().replace("{{BRAND_UPPER}}", b.upper()).replace("{{BRAND}}", b))
+PY
 cp "$DIR/site/favicon.svg" "$DIR/site/robots.txt" "$WEB/"
 mkdir -p /var/www/html
 NG="/etc/nginx/sites-available/$DOMAIN"
@@ -120,7 +124,7 @@ command -v xray >/dev/null || die "Xray не установился"
 PRIV=$(xray x25519 | awk '/Private/{print $NF}')
 UUID=$(xray uuid)
 SID=$(openssl rand -hex 8)
-[ -s "$CFG" ] && cp "$CFG" "$CFG.before-panel.$(date +%F-%H%M)"
+if [ -s "$CFG" ]; then B="$CFG.before-panel.$(date +%F-%H%M)"; cp "$CFG" "$B"; chmod 600 "$B"; fi
 mkdir -p "$(dirname "$CFG")"
 python3 - "$CFG" "$UUID" "$FIRST" "$SITE_PORT" "$PRIV" "$SID" "$DOMAIN" "$WWW" <<'PY'
 import json, sys
@@ -136,13 +140,15 @@ c = {"log": {"loglevel": "warning"},
      "outbounds": [{"protocol": "freedom", "tag": "direct"}, {"protocol": "blackhole", "tag": "block"}]}
 json.dump(c, open(cfg, "w"), indent=2)
 PY
-chmod 644 "$CFG"
+chmod 600 "$CFG"
 xray run -test -config "$CFG" >/dev/null || die "Конфиг Xray не прошёл проверку"
-python3 - "$META" "$NAME" "$DOMAIN" <<'PY'
-import json, sys
-meta, name, dom = sys.argv[1:]
-json.dump({"name": name, "host": dom, "warp_users": [], "warp_all": False, "disabled": {}},
-          open(meta, "w"), indent=2, ensure_ascii=False)
+python3 - "$META" "$NAME" "$DOMAIN" "$IP" <<'PY'
+import json, os, sys
+meta, name, dom, ip = sys.argv[1:]
+fd = os.open(meta, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    json.dump({"name": name, "host": dom, "ips": [ip], "warp_users": [], "warp_all": False, "disabled": {}},
+              f, indent=2, ensure_ascii=False)
 PY
 systemctl enable -q xray
 python3 - "$DIR" <<'PY'
@@ -154,7 +160,7 @@ vpn.apply(vpn.load_cfg(), vpn.load_meta())   # включает счётчики
 PY
 ok "Xray слушает 443, чужим показывает сайт $DOMAIN"
 
-step "Файрвол и автообновление"
+step "Файрвол"
 if ufw status 2>/dev/null | grep -q "Status: active"; then
     for p in $( { ss -tlnpH 2>/dev/null | grep sshd | grep -oE ':[0-9]+ ' | tr -d ': ' | sort -u; } || true); do ufw allow "$p/tcp" >/dev/null; done
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
@@ -162,8 +168,8 @@ if ufw status 2>/dev/null | grep -q "Status: active"; then
 else
     warn "ufw выключен — порты 80 и 443 должны быть открыты у хостера"
 fi
-echo "40 4 * * * root /usr/local/bin/vpn update >/dev/null 2>&1" > /etc/cron.d/vless-warp-panel-update
-ok "панель обновляется сама каждую ночь (vpn update)"
+rm -f /etc/cron.d/vless-warp-panel-update
+ok "автообновление выключено — обновляй вручную (vpn update) или включи в меню"
 
 step "Готово"
 LINK=$(python3 - "$DIR" "$FIRST" <<'PY'
