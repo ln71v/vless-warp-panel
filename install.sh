@@ -60,8 +60,14 @@ ok "порты 80 и 443 свободны, сайт будет на 127.0.0.1:$S
 
 step "Ставлю пакеты"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq nginx certbot curl unzip qrencode git python3 openssl >/dev/null
+# свежая система в первые минуты сама ставит обновления и держит apt — ждём, а не падаем
+for i in $(seq 1 60); do
+    fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock >/dev/null 2>&1 || break
+    [ "$i" = 1 ] && warn "система ставит обновления, жду (до 10 минут)…"
+    sleep 10
+done
+apt-get -o DPkg::Lock::Timeout=300 update -qq
+apt-get -o DPkg::Lock::Timeout=300 install -y -qq nginx certbot curl unzip qrencode git python3 openssl >/dev/null
 ok "nginx, certbot, qrencode, git"
 
 step "Скачиваю панель"
