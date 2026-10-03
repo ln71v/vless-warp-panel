@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{BRAND}} — предметная и интерьерная фотосъёмка. Портфолио, услуги и контакты.">
+  <meta name="theme-color" content="#f6f1e8">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <title>{{BRAND}} — предметная и интерьерная съёмка</title>
+  <style>
+    :root { --bg:#f6f1e8; --ink:#1d2421; --muted:#5f6a64; --accent:#1f3a34; --sand:#e9d8b4; --line:#ddd3c2; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.65 "Segoe UI",Inter,system-ui,-apple-system,sans-serif; }
+    a { color:var(--accent); }
+    .wrap { max-width:1080px; margin:0 auto; padding:0 20px; }
+    header { border-bottom:1px solid var(--line); }
+    header .wrap { display:flex; align-items:center; justify-content:space-between; gap:16px; height:72px; }
+    .logo { display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.06em; text-decoration:none; color:var(--ink); }
+    .logo img { width:30px; height:30px; }
+    nav { display:flex; gap:20px; flex-wrap:wrap; }
+    nav a { color:var(--muted); text-decoration:none; font-size:14px; }
+    nav a:hover { color:var(--accent); }
+    .hero { padding:72px 0 56px; display:grid; grid-template-columns:1.1fr .9fr; gap:40px; align-items:center; }
+    h1 { font-family:Georgia,"Times New Roman",serif; font-weight:400; font-size:clamp(36px,5.5vw,60px); line-height:1.05; margin:0 0 20px; }
+    .lead { color:var(--muted); max-width:480px; margin:0 0 28px; }
+    .btn { display:inline-block; background:var(--accent); color:#fff; padding:12px 22px; border-radius:999px; text-decoration:none; font-size:15px; }
+    .frame { aspect-ratio:4/5; border-radius:20px; background:linear-gradient(160deg,#cdbb97 0%,#8c9c8a 55%,#1f3a34 100%); position:relative; overflow:hidden; }
+    .frame::after { content:""; position:absolute; inset:18% 22%; border-radius:50%; background:radial-gradient(circle at 35% 35%,#f6efe0 0,#d9c7a1 45%,transparent 70%); opacity:.85; }
+    section { padding:56px 0; border-top:1px solid var(--line); }
+    h2 { font-family:Georgia,serif; font-weight:400; font-size:30px; margin:0 0 24px; }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+    .tile { aspect-ratio:1; border-radius:14px; }
+    .t1 { background:linear-gradient(135deg,#d8c7a4,#a7b3a0); } .t2 { background:linear-gradient(135deg,#2f4a43,#8aa094); } .t3 { background:linear-gradient(135deg,#efe4cf,#c9a97a); }
+    .t4 { background:linear-gradient(135deg,#9eab9c,#3c564e); } .t5 { background:linear-gradient(135deg,#e3d5bb,#7f8f84); } .t6 { background:linear-gradient(135deg,#b99d72,#f1e6d2); }
+    .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+    .card { background:#fffaf2; border:1px solid var(--line); border-radius:16px; padding:22px; }
+    .card h3 { margin:0 0 8px; font-size:18px; }
+    .card p { margin:0; color:var(--muted); font-size:15px; }
+    .price { margin-top:14px; font-weight:600; color:var(--accent); }
+    footer { border-top:1px solid var(--line); padding:28px 0 40px; color:var(--muted); font-size:14px; }
+    @media (max-width:760px) { .hero { grid-template-columns:1fr; padding-top:40px; } .grid,.cards { grid-template-columns:1fr 1fr; } nav { display:none; } }
+    @media (max-width:460px) { .cards { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a class="logo" href="/"><img src="/favicon.svg" alt="">{{BRAND_UPPER}}</a>
+      <nav><a href="#works">Работы</a><a href="#services">Услуги</a><a href="#contacts">Контакты</a></nav>
+    </div>
+  </header>
+  <main class="wrap">
+    <div class="hero">
+      <div>
+        <h1>Свет, форма и&nbsp;немного тишины</h1>
+        <p class="lead">Небольшая студия предметной и интерьерной съёмки. Снимаем керамику, текстиль, мебель и пространства для каталогов, маркетплейсов и личных проектов.</p>
+        <a class="btn" href="#contacts">Обсудить съёмку</a>
+      </div>
+      <div class="frame" role="img" aria-label="Образец работы студии"></div>
+    </div>
+    <section id="works">
+      <h2>Избранные работы</h2>
+      <div class="grid">
+        <div class="tile t1"></div><div class="tile t2"></div><div class="tile t3"></div>
+        <div class="tile t4"></div><div class="tile t5"></div><div class="tile t6"></div>
+      </div>
+    </section>
+    <section id="services">
+      <h2>Услуги</h2>
+      <div class="cards">
+        <div class="card"><h3>Предметная съёмка</h3><p>Каталожные кадры на однотонном фоне и в лёгкой стилизации.</p><div class="price">по запросу</div></div>
+        <div class="card"><h3>Интерьеры</h3><p>Квартиры, мастерские, небольшие кафе и шоурумы.</p><div class="price">по запросу</div></div>
+        <div class="card"><h3>Ретушь</h3><p>Аккуратная обработка без пластика и лишнего блеска.</p><div class="price">по запросу</div></div>
+      </div>
+    </section>
+    <section id="contacts">
+      <h2>Контакты</h2>
+      <p>Сейчас мы обновляем портфолио и принимаем заявки в порядке очереди. Новые работы появятся здесь в ближайшее время.</p>
+    </section>
+  </main>
+  <footer><div class="wrap">© 2026 {{BRAND}}</div></footer>
+</body>
+</html>
